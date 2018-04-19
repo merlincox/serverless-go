@@ -1,26 +1,729 @@
 AWSTemplateFormatVersion : '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: A hello world application.
+
+Description: API for GNL ExChronicle
+
+Parameters:
+  AutoPublishAliasName:
+    Type: String
+    Default: current
+    Description: The alias used for Auto Publishing
+  Release:
+    Type: String
+    Default: Stage
+    Description: Release
+  FunctionNameBase:
+    Type: String
+    Default: ApiLambda
+    Description: The Lambda Function Base Name
+  S3Bucket:
+    Type: String
+    Description: The mock data bucket
+  S3Filename:
+    Type: String
+    Descriptioon: The mock data file
+
 Resources:
-  HelloFunction:
-    Type: AWS::Serverless::Function
+
+  MockDataBucket:
+    Type: "AWS::S3::Bucket"
     Properties:
-      Handler: bin/hello
+      BucketName: !Ref S3Bucket
+
+  ApiLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      AutoPublishAlias: !Ref AutoPublishAliasName
+      FunctionName: !Sub ${FunctionNameBase}-${Release}
+      Handler: bin/lambda
       Runtime: go1.x
+      Environment:
+        Variables:
+          RELEASE: !Ref Release
+          FILENAME: !Ref S3Filename
+          AWS: "true"
+          BUCKET: !Ref S3Bucket
+          REGION: !Ref "AWS::Region"
+      Role: !GetAtt ApiLambdaFunctionIAMRole.Arn
       Events:
-        Vote:
+        AnyRequest:
           Type: Api
           Properties:
-            Path: /hello
-            Method: get
-  WorldFunction:
-    Type: AWS::Serverless::Function
+            Path: /
+            Method: ANY
+            RestApiId:
+              Ref: ExChronicleAPI
+
+  ExChronicleAPILambdaPermission:
+    DependsOn : ApiLambdaFunction
+    Type: "AWS::Lambda::Permission"
     Properties:
-      Handler: bin/world
-      Runtime: go1.x
-      Events:
-        Vote:
-          Type: Api
-          Properties:
-            Path: /world
-            Method: get
+      Action: lambda:InvokeFunction
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExChronicleAPI}/*"
+      FunctionName:
+        !Sub
+        - ${FuncArn}:current
+        - { FuncArn: !GetAtt ApiLambdaFunction.Arn }
+      Principal: apigateway.amazonaws.com
+
+  ApiLambdaFunctionIAMRole:
+   Type: "AWS::IAM::Role"
+   Properties:
+     Path: "/"
+     ManagedPolicyArns:
+         - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+     AssumeRolePolicyDocument:
+       Version: "2012-10-17"
+       Statement:
+         -
+           Effect: "Allow"
+           Action:
+             - "sts:AssumeRole"
+           Principal:
+             Service:
+               - "lambda.amazonaws.com"
+     Policies: # Inline Policies
+       -
+         PolicyName: "CW-Logs"
+         PolicyDocument:
+           Version: "2012-10-17"
+           Statement:
+             -
+               Effect: "Allow"
+               Action:
+                 - "logs:*"
+               Resource: "*"
+       -
+         PolicyName: "S3-Access"
+         PolicyDocument:
+           Version: "2012-10-17"
+           Statement:
+             -
+               Effect: "Allow"
+               Action:
+                 - "s3:ListBucket"
+               Resource:
+                 - !GetAtt MockDataBucket.Arn
+             -
+               Effect: "Allow"
+               Action:
+                 - "s3:GetObject"
+               Resource:
+                 - !Sub "${MockDataBucket.Arn}/*"
+
+  ExChronicleAPI:
+    Type: 'AWS::Serverless::Api'
+    Properties:
+      StageName: !Sub ${Release}
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          version: !Sub ${Release}
+          title:  !Sub Chronicle-API-${Release}
+          description: API for GNL ExChronicle
+        schemes:
+        - "https"
+        paths:
+          /curations:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/CuratedPlaylistCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "x2xpji"
+                cacheKeyParameters:
+                - "method.request.querystring.limit"
+                - "method.request.querystring.offset"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /heros:
+            get:
+              produces:
+              - "application/json"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/HeroCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /most-watched:
+            get:
+              produces:
+              - "application/json"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /most-watched/id:
+            post:
+              produces:
+              - "application/json"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /most-watched/{period}:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "period"
+                in: "path"
+                required: true
+                type: "string"
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "w3u58d"
+                cacheKeyParameters:
+                - "method.request.path.period"
+                - "method.request.querystring.offset"
+                - "method.request.querystring.limit"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /my-videos:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "1wvn0i"
+                cacheKeyParameters:
+                - "method.request.querystring.limit"
+                - "method.request.querystring.offset"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /new:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "8szn9h"
+                cacheKeyParameters:
+                - "method.request.querystring.limit"
+                - "method.request.querystring.offset"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /picks:
+            get:
+              produces:
+              - "application/json"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollection"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /playlists:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/PlaylistCollection"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "8dy8od"
+                cacheKeyParameters:
+                - "method.request.querystring.limit"
+                - "method.request.querystring.offset"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /topics:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "video_limit"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "offset"
+                in: "query"
+                required: false
+                type: "string"
+              - name: "limit"
+                in: "query"
+                required: false
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoCollectionList"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                cacheNamespace: "2lhkzh"
+                cacheKeyParameters:
+                - "method.request.querystring.limit"
+                - "method.request.querystring.video_limit"
+                - "method.request.querystring.offset"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /video/{id}:
+            get:
+              produces:
+              - "application/json"
+              parameters:
+              - name: "id"
+                in: "path"
+                required: true
+                type: "string"
+              responses:
+                '200':
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/VideoPackage"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                uri:
+                  !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${AutoPublishAliasName}/invocations"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+        definitions:
+          VideoPackage:
+            type: "object"
+            required:
+            - "items"
+            properties:
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/Video"
+            title: "VideoPackage"
+            description: "A video packaged with its playlist siblings within GNL Chronicle"
+          HeroCollection:
+            type: "object"
+            required:
+            - "items"
+            - "offset"
+            - "total"
+            properties:
+              offset:
+                type: "integer"
+              total:
+                type: "integer"
+                description: "total for all heros, ignoring offset and limit"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/Hero"
+            title: "HeroCollection"
+            description: "Hero collection for GNL Chronicle"
+          Curator:
+            type: "object"
+            required:
+            - "id"
+            - "image"
+            - "name"
+            properties:
+              name:
+                type: "string"
+              id:
+                type: "string"
+                description: "identifier from ISite"
+              description:
+                type: "string"
+              image:
+                type: "string"
+            title: "Curator"
+            description: "A curator within GNL Chronicle"
+          CuratedPlaylist:
+            type: "object"
+            required:
+            - "curator"
+            - "playlist"
+            properties:
+              curator:
+                $ref: "#/definitions/Curator"
+              playlist:
+                $ref: "#/definitions/Playlist"
+            title: "CuratedPlaylist"
+            description: "Curated playlist for GNL Chronicle"
+          PlaylistCollection:
+            type: "object"
+            required:
+            - "items"
+            - "offset"
+            - "total"
+            properties:
+              offset:
+                type: "integer"
+              total:
+                type: "integer"
+                description: "total for all playlists, ignoring offset and limit"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/Playlist"
+            title: "VideoCollection"
+            description: "Collection of Videos within GNL Chronicle"
+          CuratedPlaylistCollection:
+            type: "object"
+            required:
+            - "items"
+            - "offset"
+            - "total"
+            properties:
+              offset:
+                type: "integer"
+              total:
+                type: "integer"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/CuratedPlaylist"
+            title: "CuratedPlaylistCollection"
+            description: "Collection of curated playlists within GNL Chronicle"
+          SmpData:
+            type: "object"
+            required:
+            - "holdingImageURL"
+            - "title"
+            properties:
+              holdingImageURL:
+                type: "string"
+              title:
+                type: "string"
+              summary:
+                type: "string"
+              guidance:
+                type: "string"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/MediaItem"
+            title: "SmpData"
+            description: "SMP data object"
+          Empty:
+            type: "object"
+            title: "Empty Schema"
+          Playlist:
+            type: "object"
+            required:
+            - "coverImageUrl"
+            - "items"
+            - "title"
+            properties:
+              title:
+                type: "string"
+              summary:
+                type: "string"
+              topic:
+                type: "string"
+              coverImageUrl:
+                type: "string"
+              sponsorID:
+                type: "string"
+              curator:
+                $ref: "#/definitions/Curator"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/Video"
+            title: "Playlist"
+            description: "A Playlist within GNL Chronicle"
+          MediaItem:
+            type: "object"
+            required:
+            - "kind"
+            - "vpid"
+            properties:
+              vpid:
+                type: "string"
+              duration:
+                type: "integer"
+                description: "duration in seconds"
+              kind:
+                type: "string"
+                default: "Programme"
+            title: "MediaItem"
+            description: "A MediaItem as passed within the array of items to play to SMP"
+          Video:
+            type: "object"
+            required:
+            - "id"
+            - "linkUri"
+            - "topic"
+            - "uri"
+            properties:
+              topic:
+                type: "string"
+              linkUri:
+                type: "string"
+                description: "For building public URL"
+              uri:
+                type: "string"
+                description: "For internal API"
+              id:
+                type: "string"
+                description: "external PID"
+              smpData:
+                $ref: "#/definitions/SmpData"
+              breakpoints:
+                type: "array"
+                items:
+                  type: "integer"
+              tags:
+                type: "array"
+                items:
+                  type: "string"
+              sponsorID:
+                type: "string"
+            title: "Video"
+            description: "An individual video within GNL Chronicle"
+          Hero:
+            type: "object"
+            required:
+            - "linkUri"
+            - "smpData"
+            properties:
+              topic:
+                type: "string"
+              backgroundImage:
+                type: "string"
+              sponsorId:
+                type: "string"
+              smpData:
+                $ref: "#/definitions/SmpData"
+              previewSmpData:
+                $ref: "#/definitions/SmpData"
+              linkUri:
+                type: "string"
+            title: "Hero"
+            description: "Hero data for GNL Chronicle"
+          VideoCollection:
+            type: "object"
+            required:
+            - "items"
+            - "offset"
+            - "total"
+            properties:
+              title:
+                type: "string"
+              summary:
+                type: "string"
+              offset:
+                type: "integer"
+              total:
+                type: "integer"
+                description: "total for all video packages, ingnoring offset and limit"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/Video"
+            title: "VideoCollection"
+            description: "A collection of videos within GNL Chronicle"
+          VideoCollectionList:
+            type: "object"
+            required:
+            - "items"
+            - "offset"
+            - "total"
+            properties:
+              offset:
+                type: "integer"
+              total:
+                type: "integer"
+              items:
+                type: "array"
+                items:
+                  $ref: "#/definitions/VideoCollection"
+            title: "VideoCollectionList"
+            description: "A list of video collections within GNL Chronicle"
